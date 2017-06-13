@@ -23,6 +23,12 @@ model_data <- read_feather("data/wutrt_model_data.feather") %>%
 state_link <- model_data %>%
   distinct(state,state_index)
 
+# link for parameters
+param_link <- data.frame(parameter=c("a","ba","bpa","bpop","bs","bspei","bta"),
+                         param=c("intercept","aridity","precip anom",
+                                 "pop","source","spei","temp anom"),
+                         stringsAsFactors = F)
+
 # read in models
 m0 <- readRDS("scripts/models/m0.rds")
 m1 <- readRDS("scripts/models/m1.rds")
@@ -37,31 +43,43 @@ m7 <- readRDS("scripts/models/m7.rds")
 compare(m0,m1,m2,m3,m4,m5,m6,m7)
 
 # plot parameters for best model
-pars = names(m7@stanfit@par_dims)[6:12]
-
-params_plot <- precis(m7,depth=2,pars=pars)@output %>% 
-  setNames(c("mean","std","lower","upper","n_eff","rhat")) %>%
-  mutate(params=row.names(.),
-         state_index=as.numeric(gsub("\\D", "", params)),
-         params=gsub("_.*$", "", params)) %>%
+post <- data.frame(extract.samples(m7,n=1000)) %>%
+  select(starts_with("a"),starts_with("b")) %>%
+  #select(starts_with("b")) %>%
+  gather() %>%
+  rename(parameter=key) %>%
+  #mutate(parameter = substring(parameter, 3)) %>%
+  group_by(parameter) %>%
+  summarize(mu=mean(value),
+            low=PI(value, prob=0.5)[[1]],
+            high=PI(value, prob=0.5)[[2]],
+            lower=PI(value, prob=0.8)[[1]],
+            higher=PI(value, prob=0.8)[[2]]) %>%
+  mutate(state_index=as.numeric(gsub("\\D", "", parameter)),
+         parameter=gsub("_.*$", "", parameter)) %>%
   left_join(state_link) %>%
-  data.frame() %>%
-  na.omit() %>%
-  mutate(state=factor(state, levels = state[order(mean)]))
+  left_join(param_link)
 
-ggplot(params_plot) + 
-  geom_pointrange(aes(x=state,y=mean,ymin=lower,ymax=upper),size=0.3) +
-  facet_wrap(~params, scales="free_x") + 
+ggplot(post) +
+  geom_linerange(aes(x=state,ymin=low,ymax=high),size=1,alpha=0.9) +
+  geom_linerange(aes(x=state,ymin=lower,ymax=higher),size=0.5,alpha=0.7) +
+  geom_point(aes(x=state,y=mu),color="black", shape=23, size = 1) +
+  geom_point(aes(x=state,y=mu),color="black", fill="white", shape=23, size = 1) +
+  coord_flip() + theme_bw() +
   geom_hline(yintercept=0, linetype="dashed") +
-  coord_flip() + 
-  theme_bw()
+  labs(y="parameter estimates",x="") +
+  facet_wrap(~param, scales="free_x",nrow=1) 
+
+
+# coefficient of determination function
+R2 <- function(y,yhat) {1 - (sum((y-yhat)^2)/sum((y-mean(y))^2))}
+
+# observed values
+y <- model_data$mg
 
 # retrodictive predictions
-m7.link <- link(m7, data=model_data)
-
-# summarize
-mu <- apply(m7.link,2,mean)
-pi <- apply(m7.link,2,PI, prob=0.95)
+mu <- apply(link(m7, n=500),2,mean)
+pi <- apply(link(m7, n=500),2,PI, prob=0.95)
 
 # pred data set
 preds <- model_data %>%
